@@ -5,22 +5,39 @@ const ExcludeURL1 = "https://guide.gcas.cloud.go.jp/privacy-policy/"
 const ExcludeURL2 = "https://guide.gcas.cloud.go.jp/search/"
 const MaxDepth = 3; // スクレイピングの深さ
 
+interface File {
+    name: string;
+    href: string;
+    type: string;
+    comment?: string;
+}
 
-async function ScrapePage(browser: Browser, url: string, depth: number = 0) {
-    // output
-    let output = [];
 
-    // 深さが最大値に達した場合は終了
-    if (depth > MaxDepth) {
-        console.log(`最大深さ ${MaxDepth} に達しました。: ${url}`);
-        return;
+interface ScrapePage {
+    title: string;
+    href: string;
+    children: (ScrapePage | File)[];
+}
+
+async function ScrapePage(browser: Browser, url: string, depth: number = 0): Promise<ScrapePage> {
+    // 変数の初期化
+    let ret: ScrapePage = {
+        title: "",
+        href: "",
+        children: [],
     }
 
     // スクレーピング
     try {
+        // ページを開く
         const page = await browser.newPage();
         await page.goto(url);
 
+        // ページタイトルを取得
+        ret.title = await page.title();
+        ret.href = await page.url();
+
+        // ハイパーリンクを収集して、hrefとtextContentを取得
         const elements = await page.$$eval('a', list => list.map(e => {
             const data = {
                 textContent: (function (x) {
@@ -36,7 +53,7 @@ async function ScrapePage(browser: Browser, url: string, depth: number = 0) {
         }));
         //console.log(elements);
 
-        //スクリーニング
+        //ハイパーリンくのスクリーニング
         const screening = elements.filter(e =>
             e.href.includes(url) &&
             !e.href.includes("#") &&
@@ -45,7 +62,7 @@ async function ScrapePage(browser: Browser, url: string, depth: number = 0) {
             e.href != ExcludeURL1 &&
             e.href != ExcludeURL2
         );
-        console.log(screening);
+        //console.log(screening);
 
         // screening.hrefがファイルかかそうでないかを判断し、ファイルならoutputに保存、それ以外なら再帰的にスクレイピング
         for (const e of screening) {
@@ -54,11 +71,26 @@ async function ScrapePage(browser: Browser, url: string, depth: number = 0) {
             // hrefがファイルかどうかを判断
             if (href.endsWith(".pdf") || href.endsWith(".docx") || href.endsWith(".xlsx") || href.endsWith(".pptx") || href.endsWith(".zip") || href.endsWith(".rar")) {
                 // ファイルの保存処理をここに追加
-                console.log(`ファイル: ${href}`);
+                const file: File = {
+                    name: textContent[0] || "ファイル名不明",
+                    href: href,
+                    type: href.split('.').pop() || "unknown",
+                }
+                ret.children.push(file);
 
             } else {
-                console.log(`再帰的にスクレイピング: ${href}`);
-                await ScrapePage(browser, href, depth + 1);
+                if (depth >= MaxDepth) {
+                    console.log(`最大深度に達しました: ${depth}`);
+                    const file: File = {
+                        name: textContent[0] || "ファイル名不明",
+                        href: href,
+                        type: "html",
+                        comment: "最大深度に達しました",
+                    }
+                    ret.children.push(file);
+                } else {
+                    ret.children.push(await ScrapePage(browser, href, depth + 1));
+                }
             }
         }
 
@@ -67,6 +99,7 @@ async function ScrapePage(browser: Browser, url: string, depth: number = 0) {
     } catch (error) {
         console.error(`エラーが発生しました: ${error}`);
     }
+    return ret;
 }
 
 async function main() {
@@ -77,17 +110,20 @@ async function main() {
     const browser = await puppeteer.launch(LAUNCH_OPTION);
 
     // スクレイピングを実行
-    await ScrapePage(browser, URL)
-        .then(() => {
-            console.log("スクレイピングが完了しました。");
-        })
-        .catch((error) => {
-            console.error("エラーが発生しました:", error);
-        });
+    const result = await ScrapePage(browser, URL);
+    // .then(() => {
+    //     console.log("スクレイピングが完了しました。");
+    // })
+    // .catch((error) => {
+    //     console.error("エラーが発生しました:", error);
+    // });
 
     // Puppeteerを終了
     await browser.close();
 
+
+    //結果
+    console.log(JSON.stringify(result, null, 2));
 }
 
 main()
