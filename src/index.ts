@@ -1,6 +1,7 @@
 import puppeteer, { Browser } from "puppeteer";
 import fs from "fs";
 
+const JSON_FILE = "output.json"; // 出力ファイル名
 const URL = "https://guide.gcas.cloud.go.jp/"
 const ExcludeURL1 = "https://guide.gcas.cloud.go.jp/privacy-policy/"
 const ExcludeURL2 = "https://guide.gcas.cloud.go.jp/search/"
@@ -159,7 +160,7 @@ async function main() {
     console.log("結果を出力します...");
     console.log(JSON.stringify(result, null, 2));
 
-    fs.writeFileSync("/Users/n/Desktop/result.json", JSON.stringify(result, null, 2), "utf-8");
+    fs.writeFileSync(JSON_FILE, JSON.stringify(result, null, 2), "utf-8");
 
 }
 
