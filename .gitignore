@@ -27,3 +27,4 @@ typings/
 .env
 .next
 *.js
+.DS_Store

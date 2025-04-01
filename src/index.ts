@@ -1,4 +1,5 @@
 import puppeteer, { Browser } from "puppeteer";
+import fs from "fs";
 
 const URL = "https://guide.gcas.cloud.go.jp/"
 const ExcludeURL1 = "https://guide.gcas.cloud.go.jp/privacy-policy/"
@@ -16,14 +17,16 @@ interface File {
 interface ScrapePage {
     title: string;
     href: string;
+    type: string;
     children: (ScrapePage | File)[];
 }
 
-async function ScrapePage(browser: Browser, url: string, depth: number = 0): Promise<ScrapePage> {
+async function _Do_ScrapePage(browser: Browser, url: string, depth: number = 0): Promise<ScrapePage | File> {
     // 変数の初期化
     let ret: ScrapePage = {
         title: "",
         href: "",
+        type: "tree",
         children: [],
     }
 
@@ -34,7 +37,14 @@ async function ScrapePage(browser: Browser, url: string, depth: number = 0): Pro
         await page.goto(url);
 
         // ページタイトルを取得
-        ret.title = await page.title();
+        // page.title()の文字列から最初の" | "以降を削除して、ret.titleに格納する
+        const title = await page.title();
+        const titleIndex = title.indexOf(" | ");
+        if (titleIndex !== -1) {
+            ret.title = title.substring(0, titleIndex);
+        } else {
+            ret.title = title;
+        }
         ret.href = await page.url();
 
         // ハイパーリンクを収集して、hrefとtextContentを取得
@@ -89,7 +99,7 @@ async function ScrapePage(browser: Browser, url: string, depth: number = 0): Pro
                     }
                     ret.children.push(file);
                 } else {
-                    ret.children.push(await ScrapePage(browser, href, depth + 1));
+                    ret.children.push(await _Do_ScrapePage(browser, href, depth + 1));
                 }
             }
         }
@@ -99,10 +109,22 @@ async function ScrapePage(browser: Browser, url: string, depth: number = 0): Pro
     } catch (error) {
         console.error(`エラーが発生しました: ${error}`);
     }
-    return ret;
+
+    // スクレイピング結果を返す
+    if (ret.children.length === 0) {
+        const file: File = {
+            name: ret.title || "ファイル名不明",
+            href: ret.href,
+            type: "html",
+        }
+        return file;
+    } else {
+        return ret;
+    }
+
 }
 
-async function main() {
+async function ScrapePage(url: string): Promise<ScrapePage | File> {
     // Puppeteerの起動
     const LAUNCH_OPTION = {
         headless: false, // ヘッドレスモードを有効にする
@@ -110,20 +132,36 @@ async function main() {
     const browser = await puppeteer.launch(LAUNCH_OPTION);
 
     // スクレイピングを実行
-    const result = await ScrapePage(browser, URL);
-    // .then(() => {
-    //     console.log("スクレイピングが完了しました。");
-    // })
-    // .catch((error) => {
-    //     console.error("エラーが発生しました:", error);
-    // });
+    const result = await _Do_ScrapePage(browser, url);
 
     // Puppeteerを終了
     await browser.close();
 
-
     //結果
-    console.log(JSON.stringify(result, null, 2));
+    return result;
 }
 
-main()
+interface FileList {
+    tree: File[];
+    name: string;
+    href: string;
+    type: string;
+    comment?: string;
+}
+
+
+async function main() {
+    console.log("スクレイピングを開始します...");
+    const result = await ScrapePage(URL);
+    console.log("スクレイピングが完了しました。");
+
+    // 結果を表示
+    console.log("結果を出力します...");
+    console.log(JSON.stringify(result, null, 2));
+
+    fs.writeFileSync("/Users/n/Desktop/result.json", JSON.stringify(result, null, 2), "utf-8");
+
+}
+
+
+main();
