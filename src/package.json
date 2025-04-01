@@ -17,6 +17,7 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
-    "puppeteer": "^24.4.0"
+    "puppeteer": "^24.4.0",
+    "xlsx-populate": "^1.21.0"
   }
 }

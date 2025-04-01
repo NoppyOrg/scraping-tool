@@ -29,3 +29,5 @@ typings/
 *.js
 .DS_Store
 JSON_FILE
+*.xlsx
+output.json
