@@ -6,8 +6,9 @@ const JSON_FILE = "output.json"; // 出力ファイル名
 const EXCEL_FILE = "output.xlsx"; // 出力ファイル名
 
 // スクレイピングするURL  
-const URL = "https://guide.gcas.cloud.go.jp/"
-//const URL = "https://guide.gcas.cloud.go.jp/general/"; // スクレイピングするURL
+// const URL = "https://guide.gcas.cloud.go.jp/"
+const URL = "https://guide.gcas.cloud.go.jp/general/"; // テスト用
+//const URL = "https://guide.gcas.cloud.go.jp/general/overview/" // テスト用
 
 const ExcludeURL1 = "https://guide.gcas.cloud.go.jp/privacy-policy/"
 const ExcludeURL2 = "https://guide.gcas.cloud.go.jp/search/"
@@ -37,8 +38,7 @@ interface Content {
 
 let ListContents: Content[] = [];
 
-
-async function _Do_ScrapePage(browser: Browser, url: string, depth: number = 0, ParentTree: File[] = []): Promise<ScrapePage | File> {
+async function _Do_ScrapePage(browser: Browser, url: string, depth: number = 0, ParentTree: File[] = [], base_url: string = ""): Promise<ScrapePage | File> {
     // 変数の初期化
     let ret: ScrapePage = {
         title: "",
@@ -48,11 +48,21 @@ async function _Do_ScrapePage(browser: Browser, url: string, depth: number = 0, 
     }
     let tree: File[] = ParentTree.concat();
 
+    // 初回のURLを取得
+    if (base_url === "") {
+        base_url = url;
+    }
+
     // スクレーピング
     try {
         // ページを開く
         const page = await browser.newPage();
-        await page.goto(url);
+        await page.goto(url, { "waitUntil": "domcontentloaded" });
+        //javascriptによる画面描画が完了するまで待機
+        //await Promise.all([
+        //    page.waitForNavigation({ waitUntil: ['load', 'networkidle0'] }),
+        //]);
+
 
         // ページタイトルを取得
         // page.title()の文字列から最初の" | "以降を削除して、ret.titleに格納する
@@ -91,14 +101,15 @@ async function _Do_ScrapePage(browser: Browser, url: string, depth: number = 0, 
 
         //ハイパーリンくのスクリーニング
         const screening = elements.filter(e =>
-            e.href.includes(url) &&
+            e.href.includes(base_url) &&
             !e.href.includes("#") &&
             !e.href.includes("mailto:") &&
             e.href != url &&
             e.href != ExcludeURL1 &&
             e.href != ExcludeURL2
         );
-        //console.log(screening);
+        console.log("スクリーニング結果");
+        console.log(screening);
 
         if (screening.length === 0) {
             const file: Content = {
@@ -165,7 +176,7 @@ async function _Do_ScrapePage(browser: Browser, url: string, depth: number = 0, 
 
                 } else {
                     console.log(`再帰的にスクレイピング: ${href}`);
-                    ret.children.push(await _Do_ScrapePage(browser, href, depth + 1, tree));
+                    ret.children.push(await _Do_ScrapePage(browser, href, depth + 1, tree, base_url));
 
                 }
             }
@@ -243,7 +254,7 @@ async function main() {
     // データを追加
     ListContents.forEach((item, index) => {
         sheet.cell(`A${index + 2}`).value(index + 1);
-        sheet.cell(`B${index + 2}`).value(item.tree[0].name);
+        sheet.cell(`B${index + 2}`).value(item.tree[0].name || "");
         sheet.cell(`C${index + 2}`).value(item.tree[1]?.name || "");
         sheet.cell(`D${index + 2}`).value(item.tree[2]?.name || "");
         if (item.type === "tree") {
