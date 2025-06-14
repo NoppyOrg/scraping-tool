@@ -14,7 +14,8 @@
   "devDependencies": {
     "@types/node": "^22.13.14",
     "ts-node": "^10.9.2",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "@types/xlsx-populate": "git+https://github.com/JanLoebel/types-xlsx-populate.git"
   },
   "dependencies": {
     "puppeteer": "^24.4.0",

@@ -7,26 +7,21 @@ const EXCEL_FILE = "output.xlsx"; // 出力ファイル名
 
 // スクレイピングするURL  
 // const URL = "https://guide.gcas.cloud.go.jp/"
-const URL = "https://guide.gcas.cloud.go.jp/general/"; // テスト用
-//const URL = "https://guide.gcas.cloud.go.jp/general/overview/" // テスト用
+const URL = "https://test.guide.gcas.cloud.go.jp/general/"; // テスト用
+//const URL = "https://test.guide.gcas.cloud.go.jp/general/overview/" // テスト用
 
-const ExcludeURL1 = "https://guide.gcas.cloud.go.jp/privacy-policy/"
-const ExcludeURL2 = "https://guide.gcas.cloud.go.jp/search/"
+const ExcludeURL: string[] = [
+    "https://guide.gcas.cloud.go.jp/privacy-policy/",
+    "https://guide.gcas.cloud.go.jp/search/",
+]
 const MaxDepth = 4; // スクレイピングの深さ
+
 
 interface File {
     name: string;
     href: string;
     type: string;
     comment?: string;
-}
-
-
-interface ScrapePage {
-    title: string;
-    href: string;
-    type: string;
-    children: (ScrapePage | File)[];
 }
 
 interface Content {
@@ -38,50 +33,44 @@ interface Content {
 
 let ListContents: Content[] = [];
 
-async function _Do_ScrapePage(browser: Browser, url: string, depth: number = 0, ParentTree: File[] = [], base_url: string = ""): Promise<ScrapePage | File> {
-    // 変数の初期化
-    let ret: ScrapePage = {
-        title: "",
-        href: "",
-        type: "tree",
-        children: [],
-    }
-    let tree: File[] = ParentTree.concat();
 
-    // 初回のURLを取得
+async function _Do_ScrapePage(browser: Browser, target_url: string, base_url: string = "", depth: number = 0, ParentTree: File[] = []) {
+    /**
+     * _Do_ScrapePage関数:  スクレイピングを実行する関数
+     *  @param browser - Puppeteerのブラウザインスタンス
+     *  @param target_url - スクレイピング対象のURL
+     *  @param base_url - ベースURL（初回は空文字列）
+     *  @param depth - 現在のスクレイピングの深さ
+     *  @param ParentTree - 親のツリー構造（初回は空配列）
+     */
+
+    // スクレーピング開始メッセージ
+    console.log(`スクレイピングを開始します: ${target_url} (深さ: ${depth})`);
+
+    // 初期化
     if (base_url === "") {
-        base_url = url;
+        base_url = target_url; // 初回はtarget_urlをベースURLとして設定
     }
 
     // スクレーピング
     try {
         // ページを開く
         const page = await browser.newPage();
-        await page.goto(url, { "waitUntil": "domcontentloaded" });
-        //javascriptによる画面描画が完了するまで待機
-        //await Promise.all([
-        //    page.waitForNavigation({ waitUntil: ['load', 'networkidle0'] }),
-        //]);
-
+        await page.goto(target_url, { 'waitUntil': 'networkidle0' }); //domcontentloaded
 
         // ページタイトルを取得
         // page.title()の文字列から最初の" | "以降を削除して、ret.titleに格納する
-        const title = await page.title();
-        const titleIndex = title.indexOf(" | ");
-        if (titleIndex !== -1) {
-            ret.title = title.substring(0, titleIndex);
+        let title: string = "";
+        const _title = await page.title();
+        const _titleIndex = _title.indexOf(" | ");
+        if (_titleIndex !== -1) {
+            title = _title.substring(0, _titleIndex);
         } else {
-            ret.title = title;
+            title = _title || "タイトル不明";
         }
-        ret.href = await page.url();
 
-        //Create Tree Item
-        const treeItem: File = {
-            name: ret.title,
-            href: ret.href,
-            type: "tree",
-        }
-        tree.push(treeItem);
+        // URLを取得
+        const href: string = page.url();
 
         // ハイパーリンクを収集して、hrefとtextContentを取得
         const elements = await page.$$eval('body >>> a', list => list.map(e => {
@@ -97,59 +86,68 @@ async function _Do_ScrapePage(browser: Browser, url: string, depth: number = 0, 
             }
             return data;
         }));
-        console.log(elements);
+        // 収集した要素をログに出力
+        //console.log("収集した要素:");
+        //console.log(elements);
 
-        //ハイパーリンくのスクリーニング
+        // ParentTreeの要素のhrefのデータでリストを作成する
+        const ParentTreeLinks: string[] = ParentTree.map(e => e.href);
+
+        //ハイパーリンクのスクリーニング
         const screening = elements.filter(e =>
-            e.href.includes(base_url) &&
-            !e.href.includes("#") &&
-            !e.href.includes("mailto:") &&
-            e.href != url &&
-            e.href != ExcludeURL1 &&
-            e.href != ExcludeURL2
+            e.href.includes(base_url) &&   // ベースURLを含む
+            e.href.includes(ParentTree[ParentTree.length - 1]?.href || "") && // 親のツリー構造のURLを含む
+            !e.href.includes('/#') &&        // ハッシュリンクを除外
+            !e.href.includes("mailto:") &&  // メールリンクを除外
+            !e.href.includes('javascript:') && // JavaScriptリンクを除外
+            e.href != target_url &&         // 現在のURLを除外
+            !ParentTreeLinks.includes(e.href) && // 親のツリー構造のURLと一致するものは除外
+            !ExcludeURL.includes(e.href) // 除外URLリストに含まれない
         );
-        console.log("スクリーニング結果");
-        console.log(screening);
+        //console.log("スクリーニング結果");
+        //console.log(screening);
 
+        // Tree構造の作成と登録
+        let tree: File[] = ParentTree.concat(); // 親のツリー構造をコピー
+        const treeItem: File = {
+            name: title,
+            href: href,
+            type: "tree",
+        }
+        tree.push(treeItem);
+
+        // 取得ページ自身のコンテンツ判断と登録
         if (screening.length === 0) {
+            // 子コンテンツがない場合は、親のツリー構造をそのまま登録
             const file: Content = {
-                title: ret.title || "ファイル名不明",
-                href: ret.href,
+                title: title,
+                href: href,
                 type: "html",
                 tree: ParentTree,
             }
             ListContents.push(file);
         } else {
+            // 子コンテンツがある場合は、現在のページのツリー構造を登録
             const file: Content = {
-                title: ret.title || "ファイル名不明",
-                href: ret.href,
+                title: title,
+                href: href,
                 type: "tree",
                 tree: tree,
             }
             ListContents.push(file);
         }
 
-
-
         // screening.hrefがファイルかかそうでないかを判断し、ファイルならoutputに保存、それ以外なら再帰的にスクレイピング
         for (const e of screening) {
-            const href = e.href;
-            const textContent = e.textContent;
+            const dest_href = e.href;
+            const dest_textContent = e.textContent;
             // hrefがファイルかどうかを判断
-            if (href.endsWith(".pdf") || href.endsWith(".docx") || href.endsWith(".xlsx") || href.endsWith(".pptx") || href.endsWith(".zip") || href.endsWith(".rar")) {
-                // ファイルの保存処理をここに追加
-                const file: File = {
-                    name: textContent[0] || "ファイル名不明",
-                    href: href,
-                    type: href.split('.').pop() || "unknown",
-                }
-                ret.children.push(file);
-
+            if (dest_href.endsWith(".pdf") || dest_href.endsWith(".docx") || dest_href.endsWith(".xlsx") || dest_href.endsWith(".pptx") || dest_href.endsWith(".zip") || dest_href.endsWith(".rar")) {
                 //Create CurrentItem
                 const CurrentItem: Content = {
-                    title: file.name,
-                    href: file.href,
-                    type: file.type,
+                    title: dest_textContent[0] || "ファイル名不明",
+                    href: dest_href,
+                    type: dest_href.split('.').pop() || "unknown",
                     tree: tree,
                 }
                 ListContents.push(CurrentItem);
@@ -157,27 +155,18 @@ async function _Do_ScrapePage(browser: Browser, url: string, depth: number = 0, 
             } else {
                 if (depth >= MaxDepth) {
                     console.log(`最大深度に達しました: ${depth}`);
-                    const file: File = {
-                        name: textContent[0] || "ファイル名不明",
-                        href: href,
-                        type: "html",
-                        comment: "最大深度に達しました",
-                    }
-                    ret.children.push(file);
 
-                    //Create CurrentItem
+                    //最大深度に達した場合は、ファイルとして登録
                     const CurrentItem: Content = {
-                        title: file.name,
-                        href: file.href,
-                        type: file.type,
+                        title: dest_textContent[0] || "ファイル名不明",
+                        href: dest_href,
+                        type: "html",
                         tree: ParentTree,
                     }
                     ListContents.push(CurrentItem);
 
                 } else {
-                    console.log(`再帰的にスクレイピング: ${href}`);
-                    ret.children.push(await _Do_ScrapePage(browser, href, depth + 1, tree, base_url));
-
+                    await _Do_ScrapePage(browser, dest_href, base_url, depth + 1, tree);
                 }
             }
         }
@@ -188,21 +177,10 @@ async function _Do_ScrapePage(browser: Browser, url: string, depth: number = 0, 
         console.error(`エラーが発生しました: ${error}`);
     }
 
-    // スクレイピング結果を返す
-    if (ret.children.length === 0) {
-        const file: File = {
-            name: ret.title || "ファイル名不明",
-            href: ret.href,
-            type: "html",
-        }
-        return file;
-    } else {
-        return ret;
-    }
-
+    return;
 }
 
-async function ScrapePage(url: string): Promise<ScrapePage | File> {
+async function ScrapePage(target_url: string) {
     // Puppeteerの起動
     const LAUNCH_OPTION = {
         headless: false, // ヘッドレスモードを有効にする
@@ -210,7 +188,7 @@ async function ScrapePage(url: string): Promise<ScrapePage | File> {
     const browser = await puppeteer.launch(LAUNCH_OPTION);
 
     // スクレイピングを実行
-    const result = await _Do_ScrapePage(browser, url);
+    const result = await _Do_ScrapePage(browser, target_url);
 
     // Puppeteerを終了
     await browser.close();
@@ -219,24 +197,17 @@ async function ScrapePage(url: string): Promise<ScrapePage | File> {
     return result;
 }
 
-interface FileList {
-    tree: File[];
-    name: string;
-    href: string;
-    type: string;
-    comment?: string;
-}
-
 
 async function main() {
     console.log("スクレイピングを開始します...");
     const result = await ScrapePage(URL);
     console.log("スクレイピングが完了しました。");
 
+
+
     // 結果を表示
     console.log("結果(JSON)を出力します...");
-    fs.writeFileSync(JSON_FILE, JSON.stringify(result, null, 2), "utf-8");
-    //console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(ListContents, null, 2));
 
     //EXCEL出力
     //console.log(JSON.stringify(ListContents, null, 2), "utf-8");
@@ -266,9 +237,11 @@ async function main() {
         }
     });
 
+
     // Excelファイルを保存
     await workbook.toFileAsync(EXCEL_FILE);
     console.log("Excelファイルを出力しました。");
+
     // 終了
     console.log("終了します。");
     return 0;
