@@ -1,18 +1,26 @@
 import puppeteer, { Browser } from "puppeteer";
 import XlsxPopulate from "xlsx-populate";
-import fs from "fs";
 
 const JSON_FILE = "output.json"; // 出力ファイル名
 const EXCEL_FILE = "output.xlsx"; // 出力ファイル名
 
 // スクレイピングするURL  
 // const URL = "https://guide.gcas.cloud.go.jp/"
-const URL = "https://test.guide.gcas.cloud.go.jp/general/"; // テスト用
-//const URL = "https://test.guide.gcas.cloud.go.jp/general/overview/" // テスト用
+const URL = "https://test.guide.gcas.cloud.go.jp/" // テスト用
+//const URL = "https://test.guide.gcas.cloud.go.jp/general/"; // テスト用
+//const URL = "https://test.guide.gcas.cloud.go.jp/general/reference-architecture-document-download"; // テスト用
 
+
+// 画像の保管場所のURL(GCASの仕様では、html以外のファイルは、すべて/images/または/member/images/に格納されている)
+const ImageURL: string[] = [
+    "https://test.guide.gcas.cloud.go.jp/images/", // Publicの画像の保管場所のURL
+    "https://test.guide.gcas.cloud.go.jp/member/images/", // 非公開領域の画像の保管場所のURL
+]
+
+// 除外するURLリスト。ここに含まれるURLはスクレイピングの対象外とする
 const ExcludeURL: string[] = [
-    "https://guide.gcas.cloud.go.jp/privacy-policy/",
-    "https://guide.gcas.cloud.go.jp/search/",
+    "https://test.guide.gcas.cloud.go.jp/privacy-policy/",
+    "https://test.guide.gcas.cloud.go.jp/search",
 ]
 const MaxDepth = 4; // スクレイピングの深さ
 
@@ -32,6 +40,35 @@ interface Content {
 }
 
 let ListContents: Content[] = [];
+let DeptWaterMark: number = 0; // スクレイピングの深さを管理するためのマーカー
+
+//スクレーピング済みURLを登録するリスト
+let ScrapedUrls: string[] = [];
+
+async function _Do_GoogleAuth(browser: Browser) {
+    /**
+     * _Do_GoogleAuth関数: Google認証を行う関数
+     *  @param browser - Puppeteerのブラウザインスタンス
+     */
+    // Google認証を行うためのページを開く
+    const page = await browser.newPage();
+    await page.goto("https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Faccounts.google.com%2F&followup=https%3A%2F%2Faccounts.google.com%2F&ifkv=AdBytiOrimCtpiL4L8UpDYhNkENe4U95vaWtZP1BYyOFVhEY3KCEEbMpyYtDxcfcQV9Xtuu8wrK9&passive=1209600&flowName=GlifWebSignIn&flowEntry=ServiceLogin&dsh=S1614016228%3A1751193176223493", { waitUntil: 'networkidle2' }); // networkidle2は、ネットワーク接続がアイドル状態になるまで待機 
+    console.log("Google認証ページを開きました。");
+    // 認証情報を入力する
+    // ここでは、手動で認証を行うことを想定しています
+    console.log("手動でGoogle認証を行ってください。");
+    console.log("認証が完了したら、Enterキーを押してください。");
+    // 認証が完了するまで待機
+    await new Promise(resolve => {
+        process.stdin.once('data', () => {
+            resolve(null);
+        });
+    });
+    console.log("Google認証が完了しました。");
+    // 認証後、ページを閉じる
+    await page.close();
+    return;
+}
 
 
 async function _Do_ScrapePage(browser: Browser, target_url: string, base_url: string = "", depth: number = 0, ParentTree: File[] = []) {
@@ -52,11 +89,16 @@ async function _Do_ScrapePage(browser: Browser, target_url: string, base_url: st
         base_url = target_url; // 初回はtarget_urlをベースURLとして設定
     }
 
+    // DepthWaterMarkを更新
+    if (depth > DeptWaterMark) {
+        DeptWaterMark = depth; // 現在の深さをマーク
+    }
+
     // スクレーピング
     try {
         // ページを開く
         const page = await browser.newPage();
-        await page.goto(target_url, { 'waitUntil': 'networkidle0' }); //domcontentloaded
+        await page.goto(target_url, { 'waitUntil': 'networkidle2' }); //domcontentloaded
 
         // ページタイトルを取得
         // page.title()の文字列から最初の" | "以降を削除して、ret.titleに格納する
@@ -72,37 +114,46 @@ async function _Do_ScrapePage(browser: Browser, target_url: string, base_url: st
         // URLを取得
         const href: string = page.url();
 
+        //本ページをスクレイピング済みURLに追加する
+        ScrapedUrls.push(href);
+        ScrapedUrls.push(href + '/');
+        //console.log('スクレーピング済みURLリスト', ScrapedUrls)
+
         // ハイパーリンクを収集して、hrefとtextContentを取得
-        const elements = await page.$$eval('body >>> a', list => list.map(e => {
-            const data = {
+        const elements = await page.evaluate(() => {
+            const links = Array.from(document.querySelectorAll('a'));
+            return links.map(link => ({
                 textContent: (function (x) {
                     if (x === null) {
                         return [];
                     }
-                    // 改行文字で分割し、前後の空白を削除して、空でない要素だけをフィルタリング
+                    // 改行文字で分割し、前後の空白を削除
                     return x.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "");
-                }(e.textContent)),
-                href: e.href
-            }
-            return data;
-        }));
-        // 収集した要素をログに出力
-        //console.log("収集した要素:");
-        //console.log(elements);
+                }(link.textContent)),
+                href: link.href
+            }));
+        });
 
-        // ParentTreeの要素のhrefのデータでリストを作成する
-        const ParentTreeLinks: string[] = ParentTree.map(e => e.href);
+        // 収集した要素をログに出力
+        // console.log("収集した要素:");
+        // console.log(elements);
 
         //ハイパーリンクのスクリーニング
         const screening = elements.filter(e =>
-            e.href.includes(base_url) &&   // ベースURLを含む
-            e.href.includes(ParentTree[ParentTree.length - 1]?.href || "") && // 親のツリー構造のURLを含む
-            !e.href.includes('/#') &&        // ハッシュリンクを除外
-            !e.href.includes("mailto:") &&  // メールリンクを除外
-            !e.href.includes('javascript:') && // JavaScriptリンクを除外
-            e.href != target_url &&         // 現在のURLを除外
-            !ParentTreeLinks.includes(e.href) && // 親のツリー構造のURLと一致するものは除外
-            !ExcludeURL.includes(e.href) // 除外URLリストに含まれない
+            (
+                // html以外のファイルの場合
+                ImageURL.some(url => e.href.startsWith(url)) // 画像の保管場所のURLを含む
+            ) || (
+                // htmlファイルの場合
+                e.href.startsWith(base_url) &&   // ベースURLを含む
+                e.href.includes(ParentTree[ParentTree.length - 1]?.href || "") && // 親のツリー構造のURLを含む
+                !e.href.includes('#') &&        // ハッシュリンクを除外
+                e.href != target_url &&         // 現在のURLを除外
+                !ScrapedUrls.includes(e.href) && // スクレーピング済みURLを除外
+                !ExcludeURL.includes(e.href) && // 除外URLリストに含まれない
+                !e.textContent.includes("前の章へ") && // 特定のテキストを含まない
+                !e.textContent.includes("次の章へ")    // 特定のテキストを含まない
+            )
         );
         //console.log("スクリーニング結果");
         //console.log(screening);
@@ -203,11 +254,9 @@ async function main() {
     const result = await ScrapePage(URL);
     console.log("スクレイピングが完了しました。");
 
-
-
     // 結果を表示
-    console.log("結果(JSON)を出力します...");
-    console.log(JSON.stringify(ListContents, null, 2));
+    //console.log("結果(JSON)を出力します...");
+    //console.log(JSON.stringify(ListContents, null, 2));
 
     //EXCEL出力
     //console.log(JSON.stringify(ListContents, null, 2), "utf-8");
@@ -215,28 +264,26 @@ async function main() {
     let sheet = workbook.sheet(0);
 
     // ヘッダーを追加
-    sheet.cell("A1").value("#");
-    sheet.cell("B1").value("区分1");
-    sheet.cell("C1").value("区分2");
-    sheet.cell("D1").value("区分3");
-    sheet.cell("E1").value("ドキュメント名");
-    sheet.cell("F1").value("ファイルタイプ");
+    sheet.cell(1, 1).value("#");
+    for (let i = 2; i <= DeptWaterMark + 1; i++) {
+        sheet.cell(1, i).value(`階層${i - 1}`);
+    }
+    sheet.cell(1, DeptWaterMark + 2).value("ドキュメント名");
+    sheet.cell(1, DeptWaterMark + 3).value("ファイルタイプ");
+    sheet.cell(1, DeptWaterMark + 4).value("URL");
 
     // データを追加
-    ListContents.forEach((item, index) => {
-        sheet.cell(`A${index + 2}`).value(index + 1);
-        sheet.cell(`B${index + 2}`).value(item.tree[0].name || "");
-        sheet.cell(`C${index + 2}`).value(item.tree[1]?.name || "");
-        sheet.cell(`D${index + 2}`).value(item.tree[2]?.name || "");
-        if (item.type === "tree") {
-            sheet.cell(`E${index + 2}`).value("");
-            sheet.cell(`F${index + 2}`).value("");
-        } else {
-            sheet.cell(`E${index + 2}`).value(item.title);
-            sheet.cell(`F${index + 2}`).value(item.type);
+    ListContents.forEach((element, index) => {
+        sheet.cell(index + 2, 1).value(index + 1);
+        for (let i = 2; i <= element.tree.length + 1; i++) {
+            sheet.cell(index + 2, i).value(element.tree[i - 2].name || "");
         }
+        if (element.type !== "tree") {
+            sheet.cell(index + 2, DeptWaterMark + 2).value(element.title || "");
+        }
+        sheet.cell(index + 2, DeptWaterMark + 3).value(element.type || "");
+        sheet.cell(index + 2, DeptWaterMark + 4).value(element.href || "");
     });
-
 
     // Excelファイルを保存
     await workbook.toFileAsync(EXCEL_FILE);
